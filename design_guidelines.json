@@ -1,0 +1,110 @@
+{
+  "brand_identity": {
+    "name": "ConstructMarket",
+    "tone": "Industrial Precision",
+    "metaphor": "Digital Blueprint",
+    "theme_mode": "light",
+    "primary_archetype": "ARCHETYPE 4: SWISS & HIGH-CONTRAST",
+    "description": "A robust, no-nonsense procurement platform for the construction industry. The design should feel as reliable as a steel beam and as precise as a blueprint."
+  },
+  "typography": {
+    "font_family_heading": "Barlow Condensed, sans-serif",
+    "font_family_body": "Public Sans, sans-serif",
+    "font_import_url": "https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Public+Sans:wght@300;400;500;600&display=swap",
+    "rules": [
+      "Headings (h1-h3) must use Barlow Condensed with tracking-tight (-0.02em).",
+      "Body text must use Public Sans with distinct weights (400 for text, 500 for labels).",
+      "Uppercase labels (overline) must use Barlow Condensed, tracking-widest, font-bold."
+    ]
+  },
+  "colors": {
+    "palette_description": "Teal for Structure, Orange for Action, Slate for Foundation.",
+    "tailwind_config": {
+      "light": {
+        "background": "210 40% 98%",
+        "foreground": "215 25% 27%",
+        "card": "0 0% 100%",
+        "card-foreground": "215 25% 27%",
+        "popover": "0 0% 100%",
+        "popover-foreground": "215 25% 27%",
+        "primary": "175 77% 26%",
+        "primary-foreground": "210 40% 98%",
+        "secondary": "210 40% 96.1%",
+        "secondary-foreground": "222 47% 11.2%",
+        "muted": "210 40% 96.1%",
+        "muted-foreground": "215 16% 47%",
+        "accent": "24 94% 50%",
+        "accent-foreground": "210 40% 98%",
+        "destructive": "0 84.2% 60.2%",
+        "destructive-foreground": "210 40% 98%",
+        "border": "214 32% 91%",
+        "input": "214 32% 91%",
+        "ring": "175 77% 26%"
+      },
+      "dark": {
+        "background": "222 47% 11.2%",
+        "foreground": "210 40% 98%",
+        "card": "222 47% 11.2%",
+        "card-foreground": "210 40% 98%",
+        "popover": "222 47% 11.2%",
+        "popover-foreground": "210 40% 98%",
+        "primary": "175 77% 40%",
+        "primary-foreground": "222 47% 11.2%",
+        "secondary": "217 19% 27%",
+        "secondary-foreground": "210 40% 98%",
+        "muted": "217 19% 27%",
+        "muted-foreground": "215 20% 65%",
+        "accent": "24 94% 50%",
+        "accent-foreground": "210 40% 98%",
+        "destructive": "0 62.8% 30.6%",
+        "destructive-foreground": "210 40% 98%",
+        "border": "217 19% 27%",
+        "input": "217 19% 27%",
+        "ring": "175 77% 40%"
+      }
+    },
+    "semantic_usage": {
+      "primary": "Main branding, headers, active states, borders of active inputs.",
+      "accent": "Critical actions (Sign Contract, Submit Bid), Notification badges.",
+      "muted": "Backgrounds for secondary sections (Terms, Footer)."
+    }
+  },
+  "layout": {
+    "grid_system": "Bento Grid (Mode B for dashboards, Mode A for marketing)",
+    "spacing": "Generous (2x standard). Use p-8 where p-4 is expected.",
+    "container_style": "Sharp edges (rounded-sm or rounded-none). 1px solid borders.",
+    "glassmorphism": "Use 'Technical Grid' style: solid backgrounds with visible grid lines (border-r, border-b)."
+  },
+  "components": {
+    "buttons": "Rectangular, sharp corners (rounded-sm). Primary: Solid Teal. Secondary: Outline Slate.",
+    "cards": "Flat, white background, 1px border-slate-200. No shadow by default. Hover: shadow-md + border-teal-600 transition.",
+    "inputs": "bg-slate-50, border-slate-200, focus:ring-2 focus:ring-teal-600 focus:border-transparent rounded-sm.",
+    "navigation": "Sidebar for dashboards (slate-900 bg, white text). Top nav for marketing (white bg, sticky, border-b).",
+    "charts": "Recharts with custom tooltip styling. Colors: Teal (Growth), Orange (Pending), Slate (Static)."
+  },
+  "image_urls": {
+    "hero_main": "https://images.unsplash.com/photo-1644657711115-ee46e8dd7c7d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwyfHxjb25zdHJ1Y3Rpb24lMjBzaXRlJTIwbWFuYWdlciUyMHRhYmxldCUyMG1vZGVybiUyMGJ1aWxkaW5nJTIwc2t5bGluZSUyMGJsdWVwcmludCUyMHdvcmtlciUyMHBvcnRyYWl0fGVufDB8fHx8MTc3MjY3OTE2Nnww&ixlib=rb-4.1.0&q=85",
+    "builder_persona": "https://images.unsplash.com/photo-1763281486056-9fd34c978a7d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwzfHxjb25zdHJ1Y3Rpb24lMjBzaXRlJTIwbWFuYWdlciUyMHRhYmxldCUyMG1vZGVybiUyMGJ1aWxkaW5nJTIwc2t5bGluZSUyMGJsdWVwcmludCUyMHdvcmtlciUyMHBvcnRyYWl0fGVufDB8fHx8MTc3MjY3OTE2Nnww&ixlib=rb-4.1.0&q=85",
+    "provider_persona": "https://images.unsplash.com/photo-1761213230327-d89a8cc9cc63?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHw0fHxjb25zdHJ1Y3Rpb24lMjBzaXRlJTIwbWFuYWdlciUyMHRhYmxldCUyMG1vZGVybiUyMGJ1aWxkaW5nJTIwc2t5bGluZSUyMGJsdWVwcmludCUyMHdvcmtlciUyMHBvcnRyYWl0fGVufDB8fHx8MTc3MjY3OTE2Nnww&ixlib=rb-4.1.0&q=85",
+    "blueprint_texture": "https://images.unsplash.com/photo-1721244654346-9be0c0129e36?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjBjb25zdHJ1Y3Rpb24lMjBhcmNoaXRlY3R1cmUlMjBsb2dvJTIwd2hpdGUlMjBiYWNrZ3JvdW5kJTIwYmx1ZXByaW50JTIwcGxhbnxlbnwwfHx8fDE3NzI2NzkxNzZ8MA&ixlib=rb-4.1.0&q=85",
+    "building_vision": "https://images.unsplash.com/photo-1707638841308-252461607951?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBjb25zdHJ1Y3Rpb24lMjBhcmNoaXRlY3R1cmUlMjBsb2dvJTIwd2hpdGUlMjBiYWNrZ3JvdW5kJTIwYmx1ZXByaW50JTIwcGxhbnxlbnwwfHx8fDE3NzI2NzkxNzZ8MA&ixlib=rb-4.1.0&q=85",
+    "construction_logo_1": "https://images.unsplash.com/photo-1721244653652-268631ec049a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjBjb25zdHJ1Y3Rpb24lMjBhcmNoaXRlY3R1cmUlMjBsb2dvJTIwd2hpdGUlMjBiYWNrZ3JvdW5kJTIwYmx1ZXByaW50JTIwcGxhbnxlbnwwfHx8fDE3NzI2NzkxNzZ8MA&ixlib=rb-4.1.0&q=85",
+    "construction_logo_2": "https://images.unsplash.com/photo-1719838183551-112b45daf992?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHw0fHxtb2Rlcm4lMjBjb25zdHJ1Y3Rpb24lMjBhcmNoaXRlY3R1cmUlMjBsb2dvJTIwd2hpdGUlMjBiYWNrZ3JvdW5kJTIwYmx1ZXByaW50JTIwcGxhbnxlbnwwfHx8fDE3NzI2NzkxNzZ8MA&ixlib=rb-4.1.0&q=85"
+  },
+  "asset_instructions": {
+    "icons": "Use 'lucide-react' with a stroke-width of 1.5px (thin) for a technical look.",
+    "3d_elements": "Use Spline for hero interaction if needed, but prefer high-quality photography for trust.",
+    "logo_style": "Simple, geometric, monochrome logos for partners."
+  },
+  "universal_guidelines": [
+    "Use distinct z-index layering (depth) rather than flat design.",
+    "Avoid 'transition: all'; animate specific properties only.",
+    "Do NOT center align the app container.",
+    "Use data-testid on ALL interactive elements.",
+    "Use 'sonner' for toasts.",
+    "Components must use named exports.",
+    "Pages must use default exports.",
+    "Do not use transparent backgrounds without blur/scrim.",
+    "JS files are used (JSX syntax), not TSX."
+  ]
+}
