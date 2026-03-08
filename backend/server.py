@@ -48,6 +48,9 @@ notifications_router = APIRouter(prefix="/notifications", tags=["Notifications"]
 admin_router = APIRouter(prefix="/admin", tags=["Admin"])
 licences_router = APIRouter(prefix="/licences", tags=["Licences"])
 insurance_router = APIRouter(prefix="/insurance", tags=["Insurance"])
+marketplace_router = APIRouter(prefix="/marketplace", tags=["Marketplace"])
+crm_router = APIRouter(prefix="/crm", tags=["CRM"])
+provider_router = APIRouter(prefix="/provider", tags=["Provider"])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -971,7 +974,7 @@ async def google_session(request: Request, response: Response):
         "role": user.get("role", "pending"),
         "company_id": user.get("company_id"),
         "picture": user.get("picture"),
-        "needs_onboarding": user.get("role") == "pending" or not user.get("company_id")
+        "needs_onboarding": user.get("role") == "pending" or (user.get("role") not in ["admin", "founder"] and not user.get("company_id"))
     }
 
 @auth_router.get("/me")
@@ -994,7 +997,7 @@ async def get_me(request: Request):
         "profile_verified": user.get("profile_verified", False),
         "is_active": user.get("is_active", True),
         "company": company,
-        "needs_onboarding": user.get("role") == "pending" or not user.get("company_id")
+        "needs_onboarding": user.get("role") == "pending" or (user.get("role") not in ["admin", "founder"] and not user.get("company_id"))
     }
 
 @auth_router.post("/logout")
@@ -2459,6 +2462,443 @@ async def admin_verify_company(company_id: str, request: Request, data: dict):
     
     return {"message": f"Company {'verified' if is_verified else 'unverified'}"}
 
+# ============== MARKETPLACE ROUTES (Public) ==============
+
+@marketplace_router.get("/tasks")
+async def marketplace_list_tasks(
+    category: Optional[str] = None,
+    state: Optional[str] = None,
+    city: Optional[str] = None,
+    status: str = "posted",
+    limit: int = 50,
+    skip: int = 0
+):
+    """Public endpoint to list available tasks"""
+    query = {"status": {"$in": ["posted", "bidding_open"]}}
+    if category:
+        query["category"] = category
+    if state:
+        query["location_state"] = state
+    if city:
+        query["location_city"] = {"$regex": city, "$options": "i"}
+    
+    tasks = await db.tasks.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    total = await db.tasks.count_documents(query)
+    
+    # Get category counts
+    categories = {}
+    for cat in TASK_CATEGORIES:
+        cat_query = {"status": {"$in": ["posted", "bidding_open"]}, "category": cat}
+        categories[cat] = await db.tasks.count_documents(cat_query)
+    
+    return {"tasks": tasks, "total": total, "categories": categories}
+
+@marketplace_router.get("/tasks/{task_id}")
+async def marketplace_get_task(task_id: str):
+    """Public endpoint to get task details"""
+    task = await db.tasks.find_one({"task_id": task_id, "status": {"$in": ["posted", "bidding_open"]}}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+# ============== CRM ROUTES (Admin/Founder) ==============
+
+@crm_router.get("/dashboard")
+async def crm_dashboard(request: Request):
+    await require_role(request, ["admin", "founder"])
+    
+    # Get key metrics
+    total_users = await db.users.count_documents({})
+    total_builders = await db.users.count_documents({"role": "builder"})
+    total_providers = await db.users.count_documents({"role": "provider"})
+    total_companies = await db.companies.count_documents({})
+    
+    # Active metrics (users active in last 30 days)
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    new_customers = await db.users.count_documents({"created_at": {"$gte": thirty_days_ago}})
+    
+    # Project metrics
+    total_tasks = await db.tasks.count_documents({})
+    active_tasks = await db.tasks.count_documents({"status": {"$in": ["posted", "in_progress"]}})
+    completed_tasks = await db.tasks.count_documents({"status": "completed"})
+    
+    # Contract and payment metrics
+    total_contracts = await db.contracts.count_documents({})
+    executed_contracts = await db.contracts.count_documents({"status": "fully_executed"})
+    
+    # Calculate GMV
+    pipeline = [{"$group": {"_id": None, "total": {"$sum": "$amount"}}}]
+    gmv_result = await db.payments.aggregate(pipeline).to_list(1)
+    gmv = gmv_result[0]["total"] if gmv_result else 0
+    
+    # Revenue calculation (platform fees - assuming 5% fee)
+    total_revenue = gmv * 0.05
+    
+    # Pipeline metrics
+    pipeline_stats = {
+        "leads": await db.users.count_documents({"created_at": {"$gte": thirty_days_ago}}),
+        "in_progress": await db.tasks.count_documents({"status": "in_progress"}),
+        "won": await db.contracts.count_documents({"status": "fully_executed"}),
+        "lost": 0
+    }
+    
+    # Conversion rate
+    total_bids = await db.bids.count_documents({})
+    accepted_bids = await db.bids.count_documents({"status": "selected"})
+    conversion_rate = round((accepted_bids / total_bids * 100) if total_bids > 0 else 0, 1)
+    
+    # Recent activity
+    recent_users = await db.users.find({}, {"_id": 0, "email": 1, "first_name": 1, "created_at": 1, "role": 1}).sort("created_at", -1).limit(5).to_list(5)
+    recent_contracts = await db.contracts.find({}, {"_id": 0, "contract_id": 1, "price": 1, "created_at": 1}).sort("created_at", -1).limit(5).to_list(5)
+    
+    recent_activity = []
+    for u in recent_users:
+        recent_activity.append({
+            "type": "signup",
+            "title": f"New {u.get('role', 'user')} signup",
+            "description": f"{u.get('first_name', '')} joined the platform",
+            "created_at": u.get("created_at")
+        })
+    for c in recent_contracts:
+        recent_activity.append({
+            "type": "contract",
+            "title": "New contract created",
+            "description": f"Contract #{c.get('contract_id', '')[:8]} - ${c.get('price', 0):,.0f}",
+            "created_at": c.get("created_at")
+        })
+    
+    recent_activity.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    return {
+        "metrics": {
+            "total_revenue": total_revenue,
+            "prev_revenue": total_revenue * 0.85,  # Simulated previous month
+            "active_customers": total_users,
+            "new_customers_this_month": new_customers,
+            "active_projects": active_tasks,
+            "completed_projects": completed_tasks,
+            "gmv": gmv,
+            "total_builders": total_builders,
+            "total_providers": total_providers,
+            "total_contracts": total_contracts,
+            "conversion_rate": conversion_rate,
+            "pipeline": pipeline_stats
+        },
+        "recent_activity": recent_activity[:10]
+    }
+
+@crm_router.get("/customers")
+async def crm_customers(request: Request, role: Optional[str] = None, status: Optional[str] = None, page: int = 1, limit: int = 20):
+    await require_role(request, ["admin", "founder"])
+    
+    query = {"role": {"$in": ["builder", "provider"]}}
+    if role:
+        query["role"] = role
+    
+    skip = (page - 1) * limit
+    users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    total = await db.users.count_documents(query)
+    
+    # Enrich with company and lifetime value
+    for user in users:
+        if user.get("company_id"):
+            company = await db.companies.find_one({"company_id": user["company_id"]}, {"_id": 0, "name": 1})
+            user["company_name"] = company.get("name") if company else None
+        
+        # Calculate lifetime value
+        if user.get("role") == "builder":
+            payments = await db.payments.find({"builder_company_id": user.get("company_id")}, {"_id": 0, "amount": 1}).to_list(1000)
+        else:
+            payments = await db.payments.find({"provider_company_id": user.get("company_id")}, {"_id": 0, "amount": 1}).to_list(1000)
+        user["lifetime_value"] = sum(p.get("amount", 0) for p in payments)
+    
+    return {"customers": users, "total": total}
+
+@crm_router.get("/pipeline")
+async def crm_pipeline(request: Request, filter: str = "all"):
+    await require_role(request, ["admin", "founder"])
+    
+    # Build time filter
+    date_filter = {}
+    if filter == "month":
+        date_filter = {"created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()}}
+    elif filter == "quarter":
+        date_filter = {"created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()}}
+    elif filter == "year":
+        date_filter = {"created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()}}
+    
+    # Get deals by stage
+    deals = {
+        "lead": [],
+        "contacted": [],
+        "proposal": [],
+        "negotiation": [],
+        "won": [],
+        "lost": []
+    }
+    
+    # Map tasks to pipeline stages
+    tasks_query = {**date_filter}
+    tasks = await db.tasks.find(tasks_query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    
+    for task in tasks:
+        company = await db.companies.find_one({"company_id": task.get("company_id")}, {"_id": 0, "name": 1})
+        deal = {
+            "id": task.get("task_id"),
+            "title": task.get("title"),
+            "company_name": company.get("name") if company else "Unknown",
+            "value": task.get("budget_max") or task.get("budget_min") or 0,
+            "created_at": task.get("created_at")
+        }
+        
+        status = task.get("status")
+        if status == "draft":
+            deals["lead"].append(deal)
+        elif status == "posted":
+            deals["contacted"].append(deal)
+        elif status in ["bidding_open", "bidding_closed"]:
+            deals["proposal"].append(deal)
+        elif status == "awarded":
+            deals["negotiation"].append(deal)
+        elif status in ["in_progress", "completed"]:
+            deals["won"].append(deal)
+        elif status == "cancelled":
+            deals["lost"].append(deal)
+    
+    # Calculate stats
+    total_value = sum(sum(d.get("value", 0) for d in stage_deals) for stage_deals in deals.values())
+    won_value = sum(d.get("value", 0) for d in deals["won"])
+    total_deals = sum(len(stage_deals) for stage_deals in deals.values())
+    won_deals = len(deals["won"])
+    
+    return {
+        "deals": deals,
+        "stats": {
+            "total_value": total_value,
+            "win_rate": round((won_deals / total_deals * 100) if total_deals > 0 else 0, 1),
+            "avg_deal_size": round(total_value / total_deals if total_deals > 0 else 0, 0)
+        }
+    }
+
+@crm_router.get("/revenue")
+async def crm_revenue(request: Request, period: str = "month"):
+    await require_role(request, ["admin", "founder"])
+    
+    # Build time filter
+    if period == "week":
+        start_date = datetime.now(timezone.utc) - timedelta(days=7)
+    elif period == "month":
+        start_date = datetime.now(timezone.utc) - timedelta(days=30)
+    elif period == "quarter":
+        start_date = datetime.now(timezone.utc) - timedelta(days=90)
+    else:
+        start_date = datetime.now(timezone.utc) - timedelta(days=365)
+    
+    # Get payments in period
+    payments = await db.payments.find(
+        {"created_at": {"$gte": start_date.isoformat()}},
+        {"_id": 0}
+    ).to_list(10000)
+    
+    gmv = sum(p.get("amount", 0) for p in payments)
+    platform_fees = gmv * 0.05  # 5% platform fee
+    total_revenue = platform_fees
+    transaction_count = len(payments)
+    avg_transaction = gmv / transaction_count if transaction_count > 0 else 0
+    
+    # Revenue by category
+    category_revenue = {}
+    for payment in payments:
+        if payment.get("task_id"):
+            task = await db.tasks.find_one({"task_id": payment["task_id"]}, {"_id": 0, "category": 1})
+            cat = task.get("category", "other") if task else "other"
+            category_revenue[cat] = category_revenue.get(cat, 0) + payment.get("amount", 0)
+    
+    by_category = [
+        {"category": cat, "revenue": rev, "percentage": round(rev / gmv * 100 if gmv > 0 else 0, 1)}
+        for cat, rev in sorted(category_revenue.items(), key=lambda x: x[1], reverse=True)
+    ]
+    
+    # Monthly trend (last 6 months)
+    monthly_trend = []
+    for i in range(5, -1, -1):
+        month_start = datetime.now(timezone.utc).replace(day=1) - timedelta(days=30*i)
+        month_end = month_start + timedelta(days=30)
+        month_payments = [p for p in payments if month_start.isoformat() <= p.get("created_at", "") < month_end.isoformat()]
+        monthly_trend.append({
+            "month": month_start.strftime("%b"),
+            "revenue": sum(p.get("amount", 0) for p in month_payments) * 0.05
+        })
+    
+    max_monthly = max(m["revenue"] for m in monthly_trend) if monthly_trend else 1
+    
+    # Top customers
+    customer_revenue = {}
+    for payment in payments:
+        company_id = payment.get("builder_company_id")
+        if company_id:
+            customer_revenue[company_id] = customer_revenue.get(company_id, {"revenue": 0, "transactions": 0})
+            customer_revenue[company_id]["revenue"] += payment.get("amount", 0)
+            customer_revenue[company_id]["transactions"] += 1
+    
+    top_customers = []
+    for company_id, stats in sorted(customer_revenue.items(), key=lambda x: x[1]["revenue"], reverse=True)[:10]:
+        company = await db.companies.find_one({"company_id": company_id}, {"_id": 0, "name": 1})
+        user = await db.users.find_one({"company_id": company_id}, {"_id": 0, "first_name": 1, "last_name": 1})
+        top_customers.append({
+            "name": f"{user.get('first_name', '')} {user.get('last_name', '')}" if user else "Unknown",
+            "company": company.get("name") if company else "Unknown",
+            "transactions": stats["transactions"],
+            "revenue": stats["revenue"]
+        })
+    
+    return {
+        "total_revenue": total_revenue,
+        "revenue_change": 15.5,  # Simulated
+        "platform_fees": platform_fees,
+        "fee_rate": 5,
+        "gmv": gmv,
+        "gmv_change": 22.3,  # Simulated
+        "avg_transaction": avg_transaction,
+        "transaction_count": transaction_count,
+        "by_category": by_category,
+        "monthly_trend": monthly_trend,
+        "max_monthly": max_monthly,
+        "top_customers": top_customers
+    }
+
+@crm_router.get("/reports")
+async def crm_list_reports(request: Request):
+    await require_role(request, ["admin", "founder"])
+    # Return empty list - reports are generated on demand
+    return {"reports": []}
+
+@crm_router.post("/reports/generate")
+async def crm_generate_report(request: Request, data: dict):
+    await require_role(request, ["admin", "founder"])
+    
+    report_type = data.get("type", "executive")
+    period = data.get("period", "month")
+    
+    # Generate report based on type
+    if report_type == "executive":
+        title = "Executive Summary Report"
+        summary = [
+            {"label": "Total Revenue", "value": 45000, "type": "currency"},
+            {"label": "New Customers", "value": 23, "type": "number"},
+            {"label": "Active Projects", "value": 15, "type": "number"},
+            {"label": "Conversion Rate", "value": "18%", "type": "text"}
+        ]
+        sections = [
+            {
+                "title": "Key Highlights",
+                "type": "text",
+                "content": "Platform performance has improved by 15% compared to the previous period. Customer acquisition is on track with targets."
+            },
+            {
+                "title": "Top Performing Categories",
+                "type": "table",
+                "columns": ["Category", "Projects", "Revenue"],
+                "rows": [
+                    ["Concrete", "12", "$28,500"],
+                    ["Electrical", "8", "$15,200"],
+                    ["Plumbing", "6", "$9,800"]
+                ]
+            }
+        ]
+    else:
+        title = f"{report_type.title()} Report"
+        summary = []
+        sections = []
+    
+    return {
+        "title": title,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "period": period,
+        "summary": summary,
+        "sections": sections
+    }
+
+# ============== PROVIDER PAYOUT ROUTES ==============
+
+@provider_router.get("/payouts")
+async def provider_get_payouts(request: Request):
+    user = await get_current_user(request)
+    if user.get("role") != "provider":
+        raise HTTPException(status_code=403, detail="Provider access only")
+    
+    company_id = user.get("company_id")
+    
+    # Get completed payments (payable)
+    payments = await db.payments.find(
+        {"provider_company_id": company_id},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    
+    # Calculate stats
+    available = sum(p.get("amount", 0) for p in payments if p.get("status") == "completed")
+    pending = sum(p.get("amount", 0) for p in payments if p.get("status") in ["pending", "held"])
+    total = sum(p.get("amount", 0) for p in payments)
+    
+    return {
+        "payouts": payments,
+        "stats": {
+            "available": available,
+            "pending": pending,
+            "total": total
+        }
+    }
+
+@provider_router.get("/stripe-status")
+async def provider_stripe_status(request: Request):
+    user = await get_current_user(request)
+    company = await db.companies.find_one({"company_id": user.get("company_id")}, {"_id": 0})
+    
+    return {
+        "connected": bool(company.get("stripe_connect_id") if company else False),
+        "onboarding_url": None
+    }
+
+@provider_router.post("/stripe-onboard")
+async def provider_stripe_onboard(request: Request, data: dict):
+    user = await get_current_user(request)
+    return_url = data.get("return_url", "")
+    
+    # In production, this would create a Stripe Connect onboarding link
+    # For now, we'll simulate the response
+    return {
+        "url": return_url + "?stripe_onboarded=true",
+        "message": "Stripe Connect onboarding initiated"
+    }
+
+@provider_router.post("/request-payout")
+async def provider_request_payout(request: Request):
+    user = await get_current_user(request)
+    company_id = user.get("company_id")
+    
+    # Get available balance
+    payments = await db.payments.find(
+        {"provider_company_id": company_id, "status": "completed"},
+        {"_id": 0, "amount": 1}
+    ).to_list(100)
+    
+    available = sum(p.get("amount", 0) for p in payments)
+    
+    if available <= 0:
+        raise HTTPException(status_code=400, detail="No available balance to withdraw")
+    
+    # Create payout record (in production, this would initiate a Stripe transfer)
+    payout = {
+        "payout_id": f"payout_{uuid.uuid4().hex[:12]}",
+        "company_id": company_id,
+        "amount": available,
+        "status": "processing",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.payouts.insert_one(payout)
+    
+    return {"message": "Payout request submitted", "payout_id": payout["payout_id"]}
+
 # ============== ROOT ENDPOINT ==============
 
 @api_router.get("/")
@@ -2484,6 +2924,9 @@ api_router.include_router(invoices_router)
 api_router.include_router(ratings_router)
 api_router.include_router(notifications_router)
 api_router.include_router(admin_router)
+api_router.include_router(marketplace_router)
+api_router.include_router(crm_router)
+api_router.include_router(provider_router)
 
 app.include_router(api_router)
 

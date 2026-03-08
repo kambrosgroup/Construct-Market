@@ -16,6 +16,9 @@ export default function LandingPage() {
               <span className="font-heading text-2xl font-bold text-foreground">ConstructMarket</span>
             </div>
             <div className="flex items-center gap-4">
+              <Link to="/marketplace">
+                <Button variant="ghost" data-testid="nav-marketplace-btn">Marketplace</Button>
+              </Link>
               <Link to="/login">
                 <Button variant="ghost" data-testid="nav-login-btn">Log In</Button>
               </Link>

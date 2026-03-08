@@ -32,7 +32,11 @@ import {
   Shield,
   BarChart3,
   AlertTriangle,
-  ChevronRight
+  ChevronRight,
+  DollarSign,
+  TrendingUp,
+  Target,
+  PieChart
 } from 'lucide-react';
 import axios from 'axios';
 
@@ -51,6 +55,7 @@ const providerNavItems = [
   { href: '/provider/bids', label: 'My Bids', icon: ClipboardList },
   { href: '/provider/contracts', label: 'Contracts', icon: FileText },
   { href: '/provider/work-orders', label: 'Work Orders', icon: Hammer },
+  { href: '/provider/payouts', label: 'Payouts', icon: DollarSign },
   { href: '/provider/ratings', label: 'Ratings', icon: Star },
   { href: '/provider/settings', label: 'Settings', icon: Settings },
 ];
@@ -62,9 +67,18 @@ const adminNavItems = [
   { href: '/admin/compliance', label: 'Compliance', icon: Shield },
   { href: '/admin/disputes', label: 'Disputes', icon: AlertTriangle },
   { href: '/admin/analytics', label: 'Analytics', icon: BarChart3 },
+  { href: '/crm', label: 'CRM', icon: Target, divider: true },
 ];
 
-export function DashboardLayout({ children, title }) {
+const crmNavItems = [
+  { href: '/crm', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/crm/customers', label: 'Customers', icon: Users },
+  { href: '/crm/pipeline', label: 'Pipeline', icon: Target },
+  { href: '/crm/revenue', label: 'Revenue', icon: TrendingUp },
+  { href: '/crm/reports', label: 'Reports', icon: PieChart },
+];
+
+export function DashboardLayout({ children, title, isCRM = false }) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -72,7 +86,8 @@ export function DashboardLayout({ children, title }) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  const navItems = user?.role === 'builder' ? builderNavItems : 
+  const navItems = isCRM ? crmNavItems :
+                   user?.role === 'builder' ? builderNavItems : 
                    user?.role === 'provider' ? providerNavItems : adminNavItems;
 
   useEffect(() => {

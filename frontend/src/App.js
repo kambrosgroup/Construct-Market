@@ -9,6 +9,8 @@ import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import OnboardingPage from './pages/OnboardingPage';
 import AuthCallback from './pages/AuthCallback';
+import Marketplace from './pages/Marketplace';
+import MarketplaceTaskDetail from './pages/MarketplaceTaskDetail';
 
 // Builder Pages
 import BuilderDashboard from './pages/builder/Dashboard';
@@ -32,6 +34,7 @@ import ProviderWorkOrders from './pages/provider/WorkOrders';
 import ProviderWorkOrderDetail from './pages/provider/WorkOrderDetail';
 import ProviderRatings from './pages/provider/Ratings';
 import ProviderSettings from './pages/provider/Settings';
+import ProviderPayouts from './pages/provider/Payouts';
 
 // Admin Pages
 import AdminDashboard from './pages/admin/Dashboard';
@@ -40,6 +43,13 @@ import AdminCompanies from './pages/admin/Companies';
 import AdminCompliance from './pages/admin/Compliance';
 import AdminDisputes from './pages/admin/Disputes';
 import AdminAnalytics from './pages/admin/Analytics';
+
+// CRM Pages (Founder)
+import CRMDashboard from './pages/crm/Dashboard';
+import CRMCustomers from './pages/crm/Customers';
+import CRMPipeline from './pages/crm/Pipeline';
+import CRMRevenue from './pages/crm/Revenue';
+import CRMReports from './pages/crm/Reports';
 
 // Shared
 import PaymentSuccess from './pages/PaymentSuccess';
@@ -181,6 +191,7 @@ const RoleRedirect = () => {
   if (user.role === 'builder') return <Navigate to="/builder" replace />;
   if (user.role === 'provider') return <Navigate to="/provider" replace />;
   if (user.role === 'admin') return <Navigate to="/admin" replace />;
+  if (user.role === 'founder') return <Navigate to="/crm" replace />;
   
   return <Navigate to="/" replace />;
 };
@@ -201,6 +212,8 @@ function AppRouter() {
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/onboarding" element={<OnboardingPage />} />
       <Route path="/dashboard" element={<RoleRedirect />} />
+      <Route path="/marketplace" element={<Marketplace />} />
+      <Route path="/marketplace/:taskId" element={<MarketplaceTaskDetail />} />
       
       {/* Payment Success */}
       <Route path="/payments/:paymentId/success" element={<PaymentSuccess />} />
@@ -226,6 +239,7 @@ function AppRouter() {
       <Route path="/provider/work-orders" element={<ProtectedRoute allowedRoles={['provider']}><ProviderWorkOrders /></ProtectedRoute>} />
       <Route path="/provider/work-orders/:workOrderId" element={<ProtectedRoute allowedRoles={['provider']}><ProviderWorkOrderDetail /></ProtectedRoute>} />
       <Route path="/provider/ratings" element={<ProtectedRoute allowedRoles={['provider']}><ProviderRatings /></ProtectedRoute>} />
+      <Route path="/provider/payouts" element={<ProtectedRoute allowedRoles={['provider']}><ProviderPayouts /></ProtectedRoute>} />
       <Route path="/provider/settings" element={<ProtectedRoute allowedRoles={['provider']}><ProviderSettings /></ProtectedRoute>} />
 
       {/* Admin Routes */}
@@ -235,6 +249,13 @@ function AppRouter() {
       <Route path="/admin/compliance" element={<ProtectedRoute allowedRoles={['admin']}><AdminCompliance /></ProtectedRoute>} />
       <Route path="/admin/disputes" element={<ProtectedRoute allowedRoles={['admin']}><AdminDisputes /></ProtectedRoute>} />
       <Route path="/admin/analytics" element={<ProtectedRoute allowedRoles={['admin']}><AdminAnalytics /></ProtectedRoute>} />
+
+      {/* CRM/Founder Routes */}
+      <Route path="/crm" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMDashboard /></ProtectedRoute>} />
+      <Route path="/crm/customers" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMCustomers /></ProtectedRoute>} />
+      <Route path="/crm/pipeline" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMPipeline /></ProtectedRoute>} />
+      <Route path="/crm/revenue" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMRevenue /></ProtectedRoute>} />
+      <Route path="/crm/reports" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMReports /></ProtectedRoute>} />
 
       {/* Catch all */}
       <Route path="*" element={<Navigate to="/" replace />} />
