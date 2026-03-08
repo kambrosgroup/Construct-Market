@@ -54,6 +54,10 @@ import CRMReports from './pages/crm/Reports';
 // Shared
 import PaymentSuccess from './pages/PaymentSuccess';
 
+// Lazy load shared pages (chat, 2FA)
+const Chat = React.lazy(() => import('./pages/shared/Chat'));
+const TwoFactorSettings = React.lazy(() => import('./pages/shared/TwoFactorSettings'));
+
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
@@ -256,6 +260,22 @@ function AppRouter() {
       <Route path="/crm/pipeline" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMPipeline /></ProtectedRoute>} />
       <Route path="/crm/revenue" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMRevenue /></ProtectedRoute>} />
       <Route path="/crm/reports" element={<ProtectedRoute allowedRoles={['admin', 'founder']}><CRMReports /></ProtectedRoute>} />
+
+      {/* Shared Routes (Chat, Security) */}
+      <Route path="/chat/:roomId" element={
+        <ProtectedRoute allowedRoles={['builder', 'provider', 'admin']}>
+          <React.Suspense fallback={<div className="flex items-center justify-center h-screen"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div></div>}>
+            <Chat />
+          </React.Suspense>
+        </ProtectedRoute>
+      } />
+      <Route path="/settings/security" element={
+        <ProtectedRoute allowedRoles={['builder', 'provider', 'admin', 'founder']}>
+          <React.Suspense fallback={<div className="flex items-center justify-center h-screen"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div></div>}>
+            <TwoFactorSettings />
+          </React.Suspense>
+        </ProtectedRoute>
+      } />
 
       {/* Catch all */}
       <Route path="*" element={<Navigate to="/" replace />} />

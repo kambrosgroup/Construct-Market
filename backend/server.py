@@ -1,5 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -15,9 +15,19 @@ import jwt
 import asyncio
 import base64
 import httpx
+import json
+import pyotp
+import qrcode
+import io
+import aiofiles
+from weasyprint import HTML
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Create uploads directory
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -51,6 +61,9 @@ insurance_router = APIRouter(prefix="/insurance", tags=["Insurance"])
 marketplace_router = APIRouter(prefix="/marketplace", tags=["Marketplace"])
 crm_router = APIRouter(prefix="/crm", tags=["CRM"])
 provider_router = APIRouter(prefix="/provider", tags=["Provider"])
+chat_router = APIRouter(prefix="/chat", tags=["Chat"])
+files_router = APIRouter(prefix="/files", tags=["Files"])
+twofa_router = APIRouter(prefix="/2fa", tags=["Two-Factor Auth"])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -2899,6 +2912,703 @@ async def provider_request_payout(request: Request):
     
     return {"message": "Payout request submitted", "payout_id": payout["payout_id"]}
 
+# ============== WEBSOCKET CHAT ==============
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, Dict[str, WebSocket]] = {}  # room_id -> {user_id: websocket}
+    
+    async def connect(self, websocket: WebSocket, room_id: str, user_id: str):
+        await websocket.accept()
+        if room_id not in self.active_connections:
+            self.active_connections[room_id] = {}
+        self.active_connections[room_id][user_id] = websocket
+    
+    def disconnect(self, room_id: str, user_id: str):
+        if room_id in self.active_connections:
+            self.active_connections[room_id].pop(user_id, None)
+            if not self.active_connections[room_id]:
+                del self.active_connections[room_id]
+    
+    async def send_personal(self, message: dict, room_id: str, user_id: str):
+        if room_id in self.active_connections and user_id in self.active_connections[room_id]:
+            await self.active_connections[room_id][user_id].send_json(message)
+    
+    async def broadcast(self, message: dict, room_id: str, exclude_user: str = None):
+        if room_id in self.active_connections:
+            for user_id, connection in self.active_connections[room_id].items():
+                if user_id != exclude_user:
+                    try:
+                        await connection.send_json(message)
+                    except:
+                        pass
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/chat/{room_id}")
+async def websocket_chat(websocket: WebSocket, room_id: str, token: str = None):
+    """WebSocket endpoint for real-time chat"""
+    # Authenticate user
+    user_id = None
+    user_name = "Anonymous"
+    try:
+        if token:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            user_id = payload.get("user_id")
+            user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+            if user:
+                user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}"
+    except:
+        pass
+    
+    if not user_id:
+        await websocket.close(code=4001)
+        return
+    
+    await manager.connect(websocket, room_id, user_id)
+    
+    # Notify room of new user
+    await manager.broadcast({
+        "type": "user_joined",
+        "user_id": user_id,
+        "user_name": user_name,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }, room_id, exclude_user=user_id)
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            
+            # Store message in database
+            message = {
+                "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                "room_id": room_id,
+                "sender_id": user_id,
+                "sender_name": user_name,
+                "content": data.get("content", ""),
+                "type": data.get("type", "text"),
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.chat_messages.insert_one(message)
+            
+            # Broadcast to room
+            await manager.broadcast({
+                "type": "message",
+                **{k: v for k, v in message.items() if k != "_id"}
+            }, room_id)
+            
+    except WebSocketDisconnect:
+        manager.disconnect(room_id, user_id)
+        await manager.broadcast({
+            "type": "user_left",
+            "user_id": user_id,
+            "user_name": user_name,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, room_id)
+
+@chat_router.get("/rooms")
+async def get_chat_rooms(request: Request):
+    """Get user's chat rooms"""
+    user = await get_current_user(request)
+    user_id = user["user_id"]
+    company_id = user.get("company_id")
+    
+    # Find rooms user is part of (via contracts)
+    rooms = []
+    
+    if user.get("role") == "builder":
+        contracts = await db.contracts.find({"builder_company_id": company_id}, {"_id": 0}).to_list(100)
+    else:
+        contracts = await db.contracts.find({"provider_company_id": company_id}, {"_id": 0}).to_list(100)
+    
+    for contract in contracts:
+        room_id = f"contract_{contract['contract_id']}"
+        last_message = await db.chat_messages.find_one(
+            {"room_id": room_id}, 
+            {"_id": 0},
+            sort=[("created_at", -1)]
+        )
+        
+        # Get other party info
+        other_company_id = contract["provider_company_id"] if user.get("role") == "builder" else contract["builder_company_id"]
+        other_company = await db.companies.find_one({"company_id": other_company_id}, {"_id": 0, "name": 1})
+        
+        rooms.append({
+            "room_id": room_id,
+            "contract_id": contract["contract_id"],
+            "other_party": other_company.get("name") if other_company else "Unknown",
+            "last_message": last_message,
+            "unread_count": 0  # Could implement read receipts
+        })
+    
+    return {"rooms": rooms}
+
+@chat_router.get("/rooms/{room_id}/messages")
+async def get_chat_messages(request: Request, room_id: str, limit: int = 50, before: str = None):
+    """Get messages for a chat room"""
+    await get_current_user(request)
+    
+    query = {"room_id": room_id}
+    if before:
+        query["created_at"] = {"$lt": before}
+    
+    messages = await db.chat_messages.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    messages.reverse()  # Oldest first
+    
+    return {"messages": messages}
+
+# ============== FILE UPLOAD ==============
+
+ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.pdf', '.doc', '.docx'}
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+@files_router.post("/upload")
+async def upload_file(request: Request, file: UploadFile = File(...), category: str = "general"):
+    """Upload a file (photos, documents)"""
+    user = await get_current_user(request)
+    
+    # Validate file extension
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"File type not allowed. Allowed: {ALLOWED_EXTENSIONS}")
+    
+    # Read and validate size
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024*1024)}MB")
+    
+    # Generate unique filename
+    file_id = f"file_{uuid.uuid4().hex[:12]}"
+    filename = f"{file_id}{ext}"
+    file_path = UPLOAD_DIR / category / filename
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save file
+    async with aiofiles.open(file_path, 'wb') as f:
+        await f.write(contents)
+    
+    # Store file metadata
+    file_record = {
+        "file_id": file_id,
+        "original_name": file.filename,
+        "filename": filename,
+        "category": category,
+        "content_type": file.content_type,
+        "size": len(contents),
+        "uploaded_by": user["user_id"],
+        "company_id": user.get("company_id"),
+        "path": str(file_path),
+        "url": f"/api/files/{file_id}",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.files.insert_one(file_record)
+    
+    return {
+        "file_id": file_id,
+        "url": file_record["url"],
+        "filename": file.filename,
+        "size": len(contents)
+    }
+
+@files_router.get("/{file_id}")
+async def get_file(file_id: str):
+    """Download/view a file"""
+    file_record = await db.files.find_one({"file_id": file_id}, {"_id": 0})
+    if not file_record:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file_path = Path(file_record["path"])
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=file_record["original_name"],
+        media_type=file_record.get("content_type", "application/octet-stream")
+    )
+
+@files_router.post("/work-diary/{work_order_id}/photos")
+async def upload_work_diary_photos(request: Request, work_order_id: str, photos: List[UploadFile] = File(...)):
+    """Upload photos to work diary"""
+    user = await get_current_user(request)
+    
+    # Verify work order exists and user has access
+    work_order = await db.work_orders.find_one({"work_order_id": work_order_id}, {"_id": 0})
+    if not work_order:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    
+    uploaded_files = []
+    for photo in photos[:10]:  # Max 10 photos per upload
+        ext = Path(photo.filename).suffix.lower()
+        if ext not in {'.jpg', '.jpeg', '.png', '.gif'}:
+            continue
+        
+        contents = await photo.read()
+        if len(contents) > MAX_FILE_SIZE:
+            continue
+        
+        file_id = f"photo_{uuid.uuid4().hex[:12]}"
+        filename = f"{file_id}{ext}"
+        file_path = UPLOAD_DIR / "work_diary" / work_order_id / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        async with aiofiles.open(file_path, 'wb') as f:
+            await f.write(contents)
+        
+        file_record = {
+            "file_id": file_id,
+            "work_order_id": work_order_id,
+            "original_name": photo.filename,
+            "filename": filename,
+            "category": "work_diary",
+            "content_type": photo.content_type,
+            "size": len(contents),
+            "uploaded_by": user["user_id"],
+            "path": str(file_path),
+            "url": f"/api/files/{file_id}",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.files.insert_one(file_record)
+        uploaded_files.append({"file_id": file_id, "url": file_record["url"]})
+    
+    # Create work diary entry
+    if uploaded_files:
+        diary_entry = {
+            "entry_id": f"diary_{uuid.uuid4().hex[:12]}",
+            "work_order_id": work_order_id,
+            "type": "photo_upload",
+            "photos": uploaded_files,
+            "note": f"Uploaded {len(uploaded_files)} photos",
+            "created_by": user["user_id"],
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.work_diary_entries.insert_one(diary_entry)
+    
+    return {"uploaded": uploaded_files, "count": len(uploaded_files)}
+
+# ============== TWO-FACTOR AUTHENTICATION ==============
+
+@twofa_router.post("/setup")
+async def setup_2fa(request: Request):
+    """Initialize 2FA setup - returns QR code"""
+    user = await get_current_user(request)
+    
+    # Generate secret
+    secret = pyotp.random_base32()
+    
+    # Store temporarily (will be confirmed on verification)
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"totp_secret_pending": secret}}
+    )
+    
+    # Generate provisioning URI
+    totp = pyotp.TOTP(secret)
+    provisioning_uri = totp.provisioning_uri(
+        name=user["email"],
+        issuer_name="ConstructMarket"
+    )
+    
+    # Generate QR code
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(provisioning_uri)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    qr_base64 = base64.b64encode(buffer.getvalue()).decode()
+    
+    return {
+        "secret": secret,
+        "qr_code": f"data:image/png;base64,{qr_base64}",
+        "manual_entry_key": secret
+    }
+
+@twofa_router.post("/verify")
+async def verify_2fa_setup(request: Request, data: dict):
+    """Verify and activate 2FA"""
+    user = await get_current_user(request)
+    code = data.get("code", "")
+    
+    user_record = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    secret = user_record.get("totp_secret_pending")
+    
+    if not secret:
+        raise HTTPException(status_code=400, detail="2FA setup not initialized")
+    
+    totp = pyotp.TOTP(secret)
+    if not totp.verify(code):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+    
+    # Activate 2FA
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {
+            "$set": {"totp_secret": secret, "two_factor_enabled": True},
+            "$unset": {"totp_secret_pending": ""}
+        }
+    )
+    
+    # Generate backup codes
+    backup_codes = [uuid.uuid4().hex[:8].upper() for _ in range(10)]
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"backup_codes": [bcrypt.hashpw(c.encode(), bcrypt.gensalt()).decode() for c in backup_codes]}}
+    )
+    
+    return {
+        "message": "2FA enabled successfully",
+        "backup_codes": backup_codes  # Show only once
+    }
+
+@twofa_router.post("/validate")
+async def validate_2fa(data: dict):
+    """Validate 2FA code during login"""
+    user_id = data.get("user_id")
+    code = data.get("code", "")
+    
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user or not user.get("two_factor_enabled"):
+        raise HTTPException(status_code=400, detail="2FA not enabled for this user")
+    
+    totp = pyotp.TOTP(user["totp_secret"])
+    if totp.verify(code):
+        # Generate new token
+        token = create_token(user["user_id"], user["email"], user["role"], user.get("company_id"))
+        return {"token": token, "valid": True}
+    
+    # Check backup codes
+    for i, hashed in enumerate(user.get("backup_codes", [])):
+        if bcrypt.checkpw(code.upper().encode(), hashed.encode()):
+            # Remove used backup code
+            backup_codes = user["backup_codes"]
+            backup_codes.pop(i)
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {"backup_codes": backup_codes}}
+            )
+            token = create_token(user["user_id"], user["email"], user["role"], user.get("company_id"))
+            return {"token": token, "valid": True, "backup_code_used": True}
+    
+    raise HTTPException(status_code=401, detail="Invalid 2FA code")
+
+@twofa_router.delete("/disable")
+async def disable_2fa(request: Request, data: dict):
+    """Disable 2FA"""
+    user = await get_current_user(request)
+    password = data.get("password", "")
+    
+    user_record = await db.users.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not bcrypt.checkpw(password.encode(), user_record.get("password_hash", "").encode()):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {
+            "$unset": {"totp_secret": "", "backup_codes": ""},
+            "$set": {"two_factor_enabled": False}
+        }
+    )
+    
+    return {"message": "2FA disabled successfully"}
+
+# ============== PDF CONTRACT EXPORT ==============
+
+@contracts_router.get("/{contract_id}/pdf")
+async def export_contract_pdf(request: Request, contract_id: str):
+    """Export contract as PDF"""
+    user = await get_current_user(request)
+    
+    contract = await db.contracts.find_one({"contract_id": contract_id}, {"_id": 0})
+    if not contract:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    
+    # Verify access
+    user_company = user.get("company_id")
+    if user_company not in [contract.get("builder_company_id"), contract.get("provider_company_id")]:
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get related data
+    task = await db.tasks.find_one({"task_id": contract.get("task_id")}, {"_id": 0})
+    builder_company = await db.companies.find_one({"company_id": contract.get("builder_company_id")}, {"_id": 0})
+    provider_company = await db.companies.find_one({"company_id": contract.get("provider_company_id")}, {"_id": 0})
+    
+    # Generate PDF HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; padding: 40px; line-height: 1.6; }}
+            .header {{ text-align: center; border-bottom: 2px solid #0d9488; padding-bottom: 20px; margin-bottom: 30px; }}
+            .header h1 {{ color: #0d9488; margin: 0; }}
+            .section {{ margin-bottom: 25px; }}
+            .section h2 {{ color: #334155; font-size: 16px; border-bottom: 1px solid #e2e8f0; padding-bottom: 5px; }}
+            .parties {{ display: flex; justify-content: space-between; }}
+            .party {{ width: 45%; }}
+            .detail-row {{ display: flex; margin-bottom: 8px; }}
+            .detail-label {{ font-weight: bold; width: 150px; }}
+            .signature-section {{ margin-top: 50px; page-break-inside: avoid; }}
+            .signature-box {{ border-top: 1px solid #000; width: 250px; margin-top: 50px; padding-top: 10px; }}
+            .footer {{ margin-top: 50px; text-align: center; font-size: 12px; color: #64748b; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>CONSTRUCTION SERVICE AGREEMENT</h1>
+            <p>Contract ID: {contract_id}</p>
+            <p>Date: {datetime.now().strftime('%B %d, %Y')}</p>
+        </div>
+        
+        <div class="section">
+            <h2>PARTIES</h2>
+            <div class="parties">
+                <div class="party">
+                    <strong>BUILDER (Principal)</strong><br>
+                    {builder_company.get('name', 'N/A') if builder_company else 'N/A'}<br>
+                    ABN: {builder_company.get('abn', 'N/A') if builder_company else 'N/A'}
+                </div>
+                <div class="party">
+                    <strong>PROVIDER (Contractor)</strong><br>
+                    {provider_company.get('name', 'N/A') if provider_company else 'N/A'}<br>
+                    ABN: {provider_company.get('abn', 'N/A') if provider_company else 'N/A'}
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>PROJECT DETAILS</h2>
+            <div class="detail-row"><span class="detail-label">Project:</span> {task.get('title', 'N/A') if task else 'N/A'}</div>
+            <div class="detail-row"><span class="detail-label">Location:</span> {task.get('location_city', '')}, {task.get('location_state', '') if task else 'N/A'}</div>
+            <div class="detail-row"><span class="detail-label">Category:</span> {task.get('category', 'N/A').replace('_', ' ').title() if task else 'N/A'}</div>
+        </div>
+        
+        <div class="section">
+            <h2>CONTRACT TERMS</h2>
+            <div class="detail-row"><span class="detail-label">Contract Price:</span> ${contract.get('price', 0):,.2f} AUD</div>
+            <div class="detail-row"><span class="detail-label">Start Date:</span> {contract.get('start_date', 'TBD')}</div>
+            <div class="detail-row"><span class="detail-label">End Date:</span> {contract.get('end_date', 'TBD')}</div>
+            <div class="detail-row"><span class="detail-label">Status:</span> {contract.get('status', '').replace('_', ' ').title()}</div>
+        </div>
+        
+        <div class="section">
+            <h2>SCOPE OF WORK</h2>
+            <p>{task.get('scope', task.get('description', 'As per project specifications')) if task else 'As per project specifications'}</p>
+        </div>
+        
+        <div class="signature-section">
+            <h2>SIGNATURES</h2>
+            <div class="parties">
+                <div class="party">
+                    <div class="signature-box">
+                        <strong>Builder Signature</strong><br>
+                        {'Signed: ' + contract.get('builder_signed_at', '')[:10] if contract.get('builder_signed_at') else 'Pending'}
+                    </div>
+                </div>
+                <div class="party">
+                    <div class="signature-box">
+                        <strong>Provider Signature</strong><br>
+                        {'Signed: ' + contract.get('provider_signed_at', '')[:10] if contract.get('provider_signed_at') else 'Pending'}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Generated by ConstructMarket | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Generate PDF
+    pdf_buffer = io.BytesIO()
+    HTML(string=html_content).write_pdf(pdf_buffer)
+    pdf_buffer.seek(0)
+    
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=contract_{contract_id}.pdf"}
+    )
+
+# ============== VERIFICATION BADGES ==============
+
+BADGE_TYPES = {
+    "verified_identity": {"name": "Identity Verified", "icon": "shield-check", "color": "green"},
+    "verified_licence": {"name": "Licensed Professional", "icon": "award", "color": "blue"},
+    "verified_insurance": {"name": "Fully Insured", "icon": "shield", "color": "purple"},
+    "top_rated": {"name": "Top Rated", "icon": "star", "color": "gold"},
+    "trusted_builder": {"name": "Trusted Builder", "icon": "building", "color": "teal"},
+    "premium_provider": {"name": "Premium Provider", "icon": "badge-check", "color": "orange"},
+    "founding_member": {"name": "Founding Member", "icon": "crown", "color": "amber"}
+}
+
+@users_router.get("/{user_id}/badges")
+async def get_user_badges(user_id: str):
+    """Get user's verification badges"""
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    badges = []
+    company_id = user.get("company_id")
+    
+    # Check identity verification
+    if user.get("profile_verified"):
+        badges.append({**BADGE_TYPES["verified_identity"], "earned_at": user.get("verified_at")})
+    
+    if company_id:
+        # Check licence verification
+        licence = await db.licences.find_one({"company_id": company_id, "status": "approved"}, {"_id": 0})
+        if licence:
+            badges.append({**BADGE_TYPES["verified_licence"], "earned_at": licence.get("verified_at")})
+        
+        # Check insurance verification
+        insurance = await db.insurance.find_one({"company_id": company_id, "status": "approved"}, {"_id": 0})
+        if insurance:
+            badges.append({**BADGE_TYPES["verified_insurance"], "earned_at": insurance.get("verified_at")})
+        
+        # Check rating
+        ratings = await db.ratings.find({"provider_company_id": company_id}, {"_id": 0, "rating": 1}).to_list(100)
+        if ratings:
+            avg_rating = sum(r["rating"] for r in ratings) / len(ratings)
+            if avg_rating >= 4.5 and len(ratings) >= 5:
+                badges.append({**BADGE_TYPES["top_rated"], "rating": avg_rating, "review_count": len(ratings)})
+        
+        # Check completed contracts
+        completed = await db.contracts.count_documents({"provider_company_id": company_id, "status": "completed"})
+        if completed >= 10 and user.get("role") == "provider":
+            badges.append({**BADGE_TYPES["premium_provider"], "completed_contracts": completed})
+        if completed >= 10 and user.get("role") == "builder":
+            badges.append({**BADGE_TYPES["trusted_builder"], "completed_contracts": completed})
+    
+    # Check founding member (early signup)
+    if user.get("created_at"):
+        created = datetime.fromisoformat(user["created_at"].replace("Z", "+00:00"))
+        if created < datetime(2026, 6, 1, tzinfo=timezone.utc):
+            badges.append({**BADGE_TYPES["founding_member"], "earned_at": user["created_at"]})
+    
+    return {"badges": badges, "badge_count": len(badges)}
+
+@admin_router.post("/users/{user_id}/badges")
+async def award_badge(request: Request, user_id: str, data: dict):
+    """Admin: Award a badge to user"""
+    await require_role(request, ["admin"])
+    
+    badge_type = data.get("badge_type")
+    if badge_type not in BADGE_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid badge type")
+    
+    user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Add custom badge
+    badge = {
+        "badge_id": f"badge_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "badge_type": badge_type,
+        **BADGE_TYPES[badge_type],
+        "awarded_by": "admin",
+        "awarded_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.user_badges.insert_one(badge)
+    
+    return {"message": "Badge awarded", "badge": {k: v for k, v in badge.items() if k != "_id"}}
+
+@companies_router.get("/{company_id}/verification-status")
+async def get_company_verification_status(company_id: str):
+    """Get company's verification status"""
+    company = await db.companies.find_one({"company_id": company_id}, {"_id": 0})
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    # Check all verifications
+    licence = await db.licences.find_one({"company_id": company_id}, {"_id": 0, "status": 1, "licence_type": 1})
+    insurance = await db.insurance.find_one({"company_id": company_id}, {"_id": 0, "status": 1, "coverage_amount": 1})
+    
+    verification_score = 0
+    verifications = []
+    
+    if company.get("is_verified"):
+        verification_score += 25
+        verifications.append({"type": "company", "status": "verified", "label": "Company Verified"})
+    else:
+        verifications.append({"type": "company", "status": "pending", "label": "Company Verification Pending"})
+    
+    if licence and licence.get("status") == "approved":
+        verification_score += 35
+        verifications.append({"type": "licence", "status": "verified", "label": f"Licensed ({licence.get('licence_type', 'Trade')})"})
+    elif licence:
+        verifications.append({"type": "licence", "status": licence.get("status", "pending"), "label": "Licence Verification In Progress"})
+    else:
+        verifications.append({"type": "licence", "status": "missing", "label": "No Licence Submitted"})
+    
+    if insurance and insurance.get("status") == "approved":
+        verification_score += 40
+        verifications.append({"type": "insurance", "status": "verified", "label": f"Insured (${insurance.get('coverage_amount', 0):,.0f})"})
+    elif insurance:
+        verifications.append({"type": "insurance", "status": insurance.get("status", "pending"), "label": "Insurance Verification In Progress"})
+    else:
+        verifications.append({"type": "insurance", "status": "missing", "label": "No Insurance Submitted"})
+    
+    # Determine trust level
+    trust_level = "unverified"
+    if verification_score >= 90:
+        trust_level = "fully_verified"
+    elif verification_score >= 50:
+        trust_level = "partially_verified"
+    elif verification_score >= 25:
+        trust_level = "basic_verified"
+    
+    return {
+        "company_id": company_id,
+        "company_name": company.get("name"),
+        "verification_score": verification_score,
+        "trust_level": trust_level,
+        "verifications": verifications,
+        "badge_eligible": verification_score >= 90
+    }
+
+# ============== PUSH NOTIFICATIONS ==============
+
+@notifications_router.post("/subscribe")
+async def subscribe_push(request: Request, data: dict):
+    """Subscribe to push notifications"""
+    user = await get_current_user(request)
+    
+    subscription = {
+        "subscription_id": f"sub_{uuid.uuid4().hex[:12]}",
+        "user_id": user["user_id"],
+        "endpoint": data.get("endpoint"),
+        "keys": data.get("keys"),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    # Upsert subscription
+    await db.push_subscriptions.update_one(
+        {"user_id": user["user_id"], "endpoint": data.get("endpoint")},
+        {"$set": subscription},
+        upsert=True
+    )
+    
+    return {"message": "Subscribed to push notifications"}
+
+@notifications_router.delete("/subscribe")
+async def unsubscribe_push(request: Request, data: dict):
+    """Unsubscribe from push notifications"""
+    user = await get_current_user(request)
+    
+    await db.push_subscriptions.delete_one({
+        "user_id": user["user_id"],
+        "endpoint": data.get("endpoint")
+    })
+    
+    return {"message": "Unsubscribed from push notifications"}
+
 # ============== ROOT ENDPOINT ==============
 
 @api_router.get("/")
@@ -2927,6 +3637,9 @@ api_router.include_router(admin_router)
 api_router.include_router(marketplace_router)
 api_router.include_router(crm_router)
 api_router.include_router(provider_router)
+api_router.include_router(chat_router)
+api_router.include_router(files_router)
+api_router.include_router(twofa_router)
 
 app.include_router(api_router)
 
