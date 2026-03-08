@@ -53,6 +53,8 @@ import CRMReports from './pages/crm/Reports';
 
 // Shared
 import PaymentSuccess from './pages/PaymentSuccess';
+import TermsAndConditions from './pages/TermsAndConditions';
+import PrivacyPolicy from './pages/PrivacyPolicy';
 
 // Lazy load shared pages (chat, 2FA)
 const Chat = React.lazy(() => import('./pages/shared/Chat'));
@@ -218,6 +220,8 @@ function AppRouter() {
       <Route path="/dashboard" element={<RoleRedirect />} />
       <Route path="/marketplace" element={<Marketplace />} />
       <Route path="/marketplace/:taskId" element={<MarketplaceTaskDetail />} />
+      <Route path="/terms" element={<TermsAndConditions />} />
+      <Route path="/privacy" element={<PrivacyPolicy />} />
       
       {/* Payment Success */}
       <Route path="/payments/:paymentId/success" element={<PaymentSuccess />} />

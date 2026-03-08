@@ -227,13 +227,47 @@ export default function LandingPage() {
       {/* Footer */}
       <footer className="py-12 bg-slate-950 border-t border-slate-800">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <Building2 className="h-6 w-6 text-primary" strokeWidth={1.5} />
-              <span className="font-heading text-xl font-bold text-white">ConstructMarket</span>
+          <div className="grid md:grid-cols-4 gap-8 mb-8">
+            <div>
+              <div className="flex items-center gap-2 mb-4">
+                <Building2 className="h-6 w-6 text-primary" strokeWidth={1.5} />
+                <span className="font-heading text-xl font-bold text-white">ConstructMarket</span>
+              </div>
+              <p className="text-slate-400 text-sm">
+                Australia's leading B2B construction procurement marketplace.
+              </p>
             </div>
+            <div>
+              <h4 className="text-white font-semibold mb-4">Platform</h4>
+              <ul className="space-y-2 text-slate-400 text-sm">
+                <li><Link to="/marketplace" className="hover:text-white transition-colors">Marketplace</Link></li>
+                <li><Link to="/signup?role=builder" className="hover:text-white transition-colors">For Builders</Link></li>
+                <li><Link to="/signup?role=provider" className="hover:text-white transition-colors">For Providers</Link></li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-white font-semibold mb-4">Company</h4>
+              <ul className="space-y-2 text-slate-400 text-sm">
+                <li><a href="#features" className="hover:text-white transition-colors">Features</a></li>
+                <li><a href="#how-it-works" className="hover:text-white transition-colors">How It Works</a></li>
+                <li><Link to="/login" className="hover:text-white transition-colors">Sign In</Link></li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-white font-semibold mb-4">Legal</h4>
+              <ul className="space-y-2 text-slate-400 text-sm">
+                <li><Link to="/terms" className="hover:text-white transition-colors">Terms & Conditions</Link></li>
+                <li><Link to="/privacy" className="hover:text-white transition-colors">Privacy Policy</Link></li>
+                <li><a href="mailto:legal@constructmarket.com.au" className="hover:text-white transition-colors">Legal Inquiries</a></li>
+              </ul>
+            </div>
+          </div>
+          <div className="pt-8 border-t border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4">
             <p className="text-slate-400 text-sm">
-              © 2026 ConstructMarket. All rights reserved. Australia.
+              © 2026 ConstructMarket Pty Ltd. All rights reserved. ABN: [To Be Inserted]
+            </p>
+            <p className="text-slate-500 text-xs">
+              Proudly Australian owned and operated
             </p>
           </div>
         </div>
